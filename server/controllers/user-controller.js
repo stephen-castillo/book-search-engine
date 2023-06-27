@@ -1,36 +1,73 @@
-// import json web token
-const jwt = require("jsonwebtoken");
-// import secret and expiration variables
-const secret = "mysecretsshhhhh";
-const expiration = "2h";
+// import user model
+const { User } = require('../models');
+// import sign token function from auth
+const { signToken } = require('../utils/auth');
 
-// create function that signs the token
 module.exports = {
-    authMiddleware: function ({ req }) {
-        // allows token to be sent via req.body, req.query, or headers
-        let token = req.body.token || req.query.token || req.headers.authorization;
+  // get a single user by either their id or their username
+  async getSingleUser({ user = null, params }, res) {
+    const foundUser = await User.findOne({
+      $or: [{ _id: user ? user._id : params.id }, { username: params.username }],
+    });
 
-        // ["Bearer", "<tokenvalue>"]
-        if (req.headers.authorization) {
-            token = token.split(" ").pop().trim();
-        }
+    if (!foundUser) {
+      return res.status(400).json({ message: 'Cannot find a user with this id!' });
+    }
 
-        if (!token) {
-            return req;
-        }
+    res.json(foundUser);
+  },
+  // create a user, sign a token, and send it back (to client/src/components/SignUpForm.js)
+  async createUser({ body }, res) {
+    const user = await User.create(body);
 
-        try {
-            const { data } = jwt.verify(token, secret, { maxAge: expiration });
-            req.user = data;
-        } catch {
-            console.log("Invalid token");
-        }
+    if (!user) {
+      return res.status(400).json({ message: 'Something is wrong!' });
+    }
+    const token = signToken(user);
+    res.json({ token, user });
+  },
+  // login a user, sign a token, and send it back (to client/src/components/LoginForm.js)
+  // {body} is destructured req.body
+  async login({ body }, res) {
+    const user = await User.findOne({ $or: [{ username: body.username }, { email: body.email }] });
+    if (!user) {
+      return res.status(400).json({ message: "Can't find this user" });
+    }
 
-        return req;
-    },
-    signToken: function ({ username, email, _id }) {
-        const payload = { username, email, _id };
+    const correctPw = await user.isCorrectPassword(body.password);
 
-        return jwt.sign({ data: payload }, secret, { expiresIn: expiration });
-    },
+    if (!correctPw) {
+      return res.status(400).json({ message: 'Wrong password!' });
+    }
+    const token = signToken(user);
+    res.json({ token, user });
+  },
+  // save a book to a user's `savedBooks` field by adding it to the set (to prevent duplicates)
+  // user comes from `req.user` created in the auth middleware function
+  async saveBook({ user, body }, res) {
+    console.log(user);
+    try {
+      const updatedUser = await User.findOneAndUpdate(
+        { _id: user._id },
+        { $addToSet: { savedBooks: body } },
+        { new: true, runValidators: true }
+      );
+      return res.json(updatedUser);
+    } catch (err) {
+      console.log(err);
+      return res.status(400).json(err);
+    }
+  },
+  // remove a book from `savedBooks`
+  async deleteBook({ user, params }, res) {
+    const updatedUser = await User.findOneAndUpdate(
+      { _id: user._id },
+      { $pull: { savedBooks: { bookId: params.bookId } } },
+      { new: true }
+    );
+    if (!updatedUser) {
+      return res.status(404).json({ message: "Couldn't find user with this id!" });
+    }
+    return res.json(updatedUser);
+  },
 };
